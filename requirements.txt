@@ -2,6 +2,8 @@ gradio==3.50.2
 opencv-python-headless==4.10.0.84
 pillow==10.4.0
 moviepy==1.0.3
-numpy==2.1.1
+# 避免衝突：讓 numpy 用 gradio 需要的版本，不自己鎖死
+numpy
 imageio==2.35.1
 imageio-ffmpeg==0.5.1
+
