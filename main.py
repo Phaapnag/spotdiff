@@ -1,5 +1,6 @@
 import os
 import time
+import PIL
 from PIL import Image
 import cv2
 import numpy as np
@@ -17,8 +18,8 @@ TITLE = "Spot the 5 Differences!"
 
 # 原有函數 (完全不變)
 def loadandalignimages(basepath: str, variantpath: str):
-    base = PIL.Image.open(basepath).convert('RGB')
-    variant = PIL.Image.open(variantpath).convert('RGB')
+    base = Image.open(basepath).convert('RGB')
+    variant = Image.open(variantpath).convert('RGB')
     w, h = base.size
     if variant.size != (w, h):
         variant = variant.resize((w, h), Image.LANCZOS)
