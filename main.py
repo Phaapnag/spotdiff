@@ -103,8 +103,20 @@ def make_video_with_opencv_frames(
 
 
 # ====== Gradio 相關函數 ======
+MAX_DISPLAY = 1024  # UI 顯示時的最大邊長（像素）
+
+def resize_for_display(img: Image.Image) -> Image.Image:
+    w, h = img.size
+    longest = max(w, h)
+    if longest <= MAX_DISPLAY:
+        return img  # 已經不大，直接用
+    scale = MAX_DISPLAY / float(longest)
+    new_size = (int(w * scale), int(h * scale))
+    return img.resize(new_size, Image.LANCZOS)
+
+
 def step1_align(base_file, variant_file):
-    """Step1: 上傳兩張圖並對齊，回傳對齊後的 base / variant。"""
+    """Step1: 上傳兩張圖並對齊，回傳給 UI 用的【縮細版】 base / variant。"""
     os.makedirs(OUTPUTDIR, exist_ok=True)
     if base_file is None or variant_file is None:
         return None, None
@@ -114,14 +126,21 @@ def step1_align(base_file, variant_file):
         Image.fromarray(variant_file) if isinstance(variant_file, np.ndarray) else variant_file
     )
 
+    # 先對齊原始尺寸
     img1, img2 = load_and_align_images(base_img, variant_img)
 
+    # 存一份「原圖對齊」給之後做影片用（如果你現在影片也是用 base_aligned / variant_aligned）
     base_aligned = os.path.join(OUTPUTDIR, "base_aligned.jpg")
     variant_aligned = os.path.join(OUTPUTDIR, "variant_aligned.jpg")
     img1.save(base_aligned)
     img2.save(variant_aligned)
 
-    return img1, img2
+    # 再做一份「縮細版」給 UI 顯示，減少每次畫圈傳輸量
+    img1_disp = resize_for_display(img1)
+    img2_disp = resize_for_display(img2)
+
+    return img1_disp, img2_disp
+
 
 
 def on_click_variant(img, evt: gr.SelectData, radius, thickness, points):
