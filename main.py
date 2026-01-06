@@ -165,6 +165,21 @@ def reset_points(img):
     """重設紅圈。"""
     return img, []
 
+def undo_last_point(img, points, radius, thickness):
+    """刪除最後一個紅圈並重畫。"""
+    points = list(points or [])
+    if not points:
+        return img, points  # 沒有點就不變
+
+    points.pop()  # 刪掉最後一個
+    if img is None:
+        return img, points
+
+    # 重新在原圖上畫剩下的點
+    pil_img = Image.fromarray(img) if isinstance(img, np.ndarray) else img
+    marked = draw_circles_on_image(pil_img, points, radius, thickness)
+    return np.array(marked), points
+
 
 def step2_make_video(points, radius, thickness):
     """Step2: 用 base_aligned + variant_aligned + points 生成影片。"""
@@ -234,6 +249,8 @@ with gr.Blocks(title="找不同 Shorts 生成器") as demo:
             label="🖊 線條粗幼",
         )
         reset_button = gr.Button("♻️ 重設所有紅圈")
+        undo_button = gr.Button("↩️ Undo 上一個紅圈")   # ★ 新增
+
 
         # Step1 對齊
         align_button.click(
@@ -255,6 +272,14 @@ with gr.Blocks(title="找不同 Shorts 生成器") as demo:
             inputs=[variant_show],
             outputs=[variant_show, points_state],
         )
+
+        # Undo 最後一個紅圈
+        undo_button.click(
+            fn=undo_last_point,
+            inputs=[variant_show, points_state, radius_slider, thickness_slider],
+            outputs=[variant_show, points_state],
+        )
+
 
     with gr.Tab("步驟 2：生成影片"):
         gr.Markdown("確認紅圈後，按下方按鈕生成 12 秒影片。")
