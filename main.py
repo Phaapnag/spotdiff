@@ -84,7 +84,7 @@ def make_video_with_opencv_frames(
         text = f"找出 5 個不同！剩餘 {remaining:.0f} 秒"
         frame = draw_text_opencv(frame, text)
 
-        framesmall = cv2.resize(frame, (width // 2, fullheight // 2), interpolation=cv2.INTERAREA)
+        framesmall = cv2.resize(frame, (width // 2, fullheight // 2), interpolation=cv2.INTER_LINEAR)
         frames.append(cv2.cvtColor(framesmall, cv2.COLOR_BGR2RGB))
 
     # Answer 部分
@@ -95,7 +95,7 @@ def make_video_with_opencv_frames(
 
         frame = draw_text_opencv(frame, "答案在下面！")
 
-        framesmall = cv2.resize(frame, (width // 2, fullheight // 2), interpolation=cv2.INTERAREA)
+        framesmall = cv2.resize(frame, (width // 2, fullheight // 2), interpolation=cv2.INTER_LINEAR)
         frames.append(cv2.cvtColor(framesmall, cv2.COLOR_BGR2RGB))
 
     clip = mpy.ImageSequenceClip(frames, fps=FPS)
@@ -190,14 +190,19 @@ with gr.Blocks(title="找不同 Shorts 生成器") as demo:
         align_button = gr.Button("✅ 對齊並顯示")
 
         with gr.Row():
-            base_show = gr.Image(label="基準圖 (已對齊)")
+            base_show = gr.Image(
+                label="基準圖 (已對齊)",
+                height=600,
+            )
             variant_show = gr.Image(
-                label="變體圖 (點擊畫紅圈)", interactive=True
+                label="變體圖 (點擊畫紅圈)", 
+                interactive=True, 
+                height=600,
             )
 
         radius_slider = gr.Slider(
             minimum=10,
-            maximum=120,
+            maximum=300,
             value=40,
             step=2,
             label="🔴 紅圈半徑 (越大圈越大)",
