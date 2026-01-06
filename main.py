@@ -116,10 +116,10 @@ def resize_for_display(img: Image.Image) -> Image.Image:
 
 
 def step1_align(base_file, variant_file):
-    """Step1: 上傳兩張圖並對齊，回傳給 UI 用的【縮細版】 base / variant。"""
+    """Step1: 上傳兩張圖並對齊，回傳給 UI 用的【縮細版】 base / variant，並保存原始變體圖。"""
     os.makedirs(OUTPUTDIR, exist_ok=True)
     if base_file is None or variant_file is None:
-        return None, None
+        return None, None, None
 
     base_img = Image.fromarray(base_file) if isinstance(base_file, np.ndarray) else base_file
     variant_img = (
@@ -129,56 +129,58 @@ def step1_align(base_file, variant_file):
     # 先對齊原始尺寸
     img1, img2 = load_and_align_images(base_img, variant_img)
 
-    # 存一份「原圖對齊」給之後做影片用（如果你現在影片也是用 base_aligned / variant_aligned）
+    # 存一份「原圖對齊」給之後做影片用
     base_aligned = os.path.join(OUTPUTDIR, "base_aligned.jpg")
     variant_aligned = os.path.join(OUTPUTDIR, "variant_aligned.jpg")
     img1.save(base_aligned)
     img2.save(variant_aligned)
 
-    # 再做一份「縮細版」給 UI 顯示，減少每次畫圈傳輸量
+    # 再做一份「縮細版」給 UI 顯示
     img1_disp = resize_for_display(img1)
     img2_disp = resize_for_display(img2)
 
-    return img1_disp, img2_disp
+    # 回傳：顯示用 base、顯示用 variant、原始顯示用 variant
+    return img1_disp, img2_disp, img2_disp
 
 
 
-def on_click_variant(img, evt: gr.SelectData, radius, thickness, points):
+
+def on_click_variant(variant_original, evt: gr.SelectData, radius, thickness, points):
     """在變體圖上點擊時，新增一個紅圈並回傳新的圖與 points。"""
-    if img is None:
+    if variant_original is None:
         return None, points
 
-    # evt.index = (x, y)
     x, y = evt.index
     points = list(points or [])
 
     # 限制最多 5 個點
     if len(points) >= 5:
-        return draw_circles_on_image(Image.fromarray(img), points, radius, thickness), points
+        marked = draw_circles_on_image(variant_original, points, radius, thickness)
+        return np.array(marked), points
 
     points.append((x, y))
-    marked = draw_circles_on_image(Image.fromarray(img), points, radius, thickness)
+    marked = draw_circles_on_image(variant_original, points, radius, thickness)
     return np.array(marked), points
 
 
-def reset_points(img):
-    """重設紅圈。"""
-    return img, []
 
-def undo_last_point(img, points, radius, thickness):
+def reset_points(variant_original):
+    """重設紅圈：回到原始變體圖，清空 points。"""
+    if variant_original is None:
+        return None, []
+    return np.array(variant_original), []
+
+
+def undo_last_point(variant_original, points, radius, thickness):
     """刪除最後一個紅圈並重畫。"""
     points = list(points or [])
-    if not points:
-        return img, points  # 沒有點就不變
+    if not points or variant_original is None:
+        return (np.array(variant_original) if variant_original is not None else None), points
 
-    points.pop()  # 刪掉最後一個
-    if img is None:
-        return img, points
-
-    # 重新在原圖上畫剩下的點
-    pil_img = Image.fromarray(img) if isinstance(img, np.ndarray) else img
-    marked = draw_circles_on_image(pil_img, points, radius, thickness)
+    points.pop()
+    marked = draw_circles_on_image(variant_original, points, radius, thickness)
     return np.array(marked), points
+
 
 
 def step2_make_video(points, radius, thickness):
@@ -216,6 +218,7 @@ with gr.Blocks(title="找不同 Shorts 生成器") as demo:
 
     # State 用來存 points
     points_state = gr.State([])
+    variant_original_state = gr.State(None)  # ★ 新增：保存「未畫圈」的變體圖
 
     with gr.Tab("步驟 1：上傳 & 對齊"):
         with gr.Row():
@@ -256,29 +259,32 @@ with gr.Blocks(title="找不同 Shorts 生成器") as demo:
         align_button.click(
             fn=step1_align,
             inputs=[base_input, variant_input],
-            outputs=[base_show, variant_show],
+            outputs=[base_show, variant_show, variant_original_state],  # ★ 多一個 state],
         )
 
         # 點擊變體圖時畫圈
         variant_show.select(
             fn=on_click_variant,
-            inputs=[variant_show, radius_slider, thickness_slider, points_state],
+            inputs=[variant_original_state, radius_slider, thickness_slider, points_state],
             outputs=[variant_show, points_state],
         )
+
 
         # 重設紅圈
         reset_button.click(
             fn=reset_points,
-            inputs=[variant_show],
+            inputs=[variant_original_state],
             outputs=[variant_show, points_state],
         )
+
 
         # Undo 最後一個紅圈
         undo_button.click(
             fn=undo_last_point,
-            inputs=[variant_show, points_state, radius_slider, thickness_slider],
+            inputs=[variant_original_state, points_state, radius_slider, thickness_slider],
             outputs=[variant_show, points_state],
         )
+
 
 
     with gr.Tab("步驟 2：生成影片"):
