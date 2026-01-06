@@ -70,36 +70,43 @@ def make_video_with_opencv_frames(
     img2markedbgr = cv2.cvtColor(np.array(img2_marked), cv2.COLOR_RGB2BGR)
 
     h, w = img1bgr.shape[:2]
-    width = w
+    
+    # ★ 改：輸出影片最大寬度 720（YouTube Shorts 夠用），減少記憶體
+    MAX_VIDEO_WIDTH = 720
+    if w > MAX_VIDEO_WIDTH:
+        scale = MAX_VIDEO_WIDTH / w
+        new_w = MAX_VIDEO_WIDTH
+        new_h = int(h * scale)
+        img1bgr = cv2.resize(img1bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        img2bgr = cv2.resize(img2bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        img2markedbgr = cv2.resize(img2markedbgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        w, h = new_w, new_h
+
     fullheight = h * 2
     frames = []
 
     # Quiz 部分
     for i in range(totalquizframes):
-        frame = np.zeros((fullheight, width, 3), dtype=np.uint8)
+        frame = np.zeros((fullheight, w, 3), dtype=np.uint8)
         frame[0:h, :, :] = img1bgr
         frame[h:fullheight, :, :] = img2bgr
 
         remaining = QUIZSECONDS - i / FPS
         text = f"找出 5 個不同！剩餘 {remaining:.0f} 秒"
         frame = draw_text_opencv(frame, text)
-
-        framesmall = cv2.resize(frame, (width // 2, fullheight // 2), interpolation=cv2.INTER_LINEAR)
-        frames.append(cv2.cvtColor(framesmall, cv2.COLOR_BGR2RGB))
+        frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
     # Answer 部分
     for _ in range(totalanswerframes):
-        frame = np.zeros((fullheight, width, 3), dtype=np.uint8)
+        frame = np.zeros((fullheight, w, 3), dtype=np.uint8)
         frame[0:h, :, :] = img1bgr
         frame[h:fullheight, :, :] = img2markedbgr
-
         frame = draw_text_opencv(frame, "答案在下面！")
-
-        framesmall = cv2.resize(frame, (width // 2, fullheight // 2), interpolation=cv2.INTER_LINEAR)
-        frames.append(cv2.cvtColor(framesmall, cv2.COLOR_BGR2RGB))
+        frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
     clip = mpy.ImageSequenceClip(frames, fps=FPS)
-    clip.write_videofile(outpath, codec="libx264", audio=False)
+    clip.write_videofile(outpath, codec="libx264", audio=False, preset="ultrafast")  # ★ 加 preset 加速
+
 
 
 # ====== Gradio 相關函數 ======
@@ -115,32 +122,42 @@ def resize_for_display(img: Image.Image) -> Image.Image:
     return img.resize(new_size, Image.LANCZOS)
 
 
+# 多加一個 state 存高清圖
+base_full_state = gr.State(None)
+variant_full_state = gr.State(None)
+
 def step1_align(base_file, variant_file):
-    """Step1: 上傳兩張圖並對齊，回傳給 UI 用的【縮細版】 base / variant，並保存原始變體圖。"""
+    """Step1: 上傳兩張圖並對齊，回傳給 UI 用的【縮細版】 base / variant，並保存原始圖到 state。"""
     os.makedirs(OUTPUTDIR, exist_ok=True)
     if base_file is None or variant_file is None:
-        return None, None, None
+        return None, None, None, None, None
 
     base_img = Image.fromarray(base_file) if isinstance(base_file, np.ndarray) else base_file
     variant_img = (
         Image.fromarray(variant_file) if isinstance(variant_file, np.ndarray) else variant_file
     )
 
-    # 先對齊原始尺寸
+    # 先對齊原始尺寸（高清）
     img1, img2 = load_and_align_images(base_img, variant_img)
 
-    # 存一份「原圖對齊」給之後做影片用
+    # 存一份「原圖對齊」給之後做影片用（可選，備份）
     base_aligned = os.path.join(OUTPUTDIR, "base_aligned.jpg")
     variant_aligned = os.path.join(OUTPUTDIR, "variant_aligned.jpg")
     img1.save(base_aligned)
     img2.save(variant_aligned)
 
-    # 再做一份「縮細版」給 UI 顯示
+    # 轉成 numpy，放在 state 裡（高清版本）
+    base_np = np.array(img1)
+    variant_np = np.array(img2)
+
+    # 再做一份「縮細版」給 UI 顯示，減少每次畫圈傳輸量
     img1_disp = resize_for_display(img1)
     img2_disp = resize_for_display(img2)
 
-    # 回傳：顯示用 base、顯示用 variant、原始顯示用 variant
-    return img1_disp, img2_disp, img2_disp
+    # 回傳：顯示用 base、顯示用 variant、原始顯示用 variant、高清 base、高清 variant
+    return img1_disp, img2_disp, img2_disp, base_np, variant_np
+    
+
 
 
 
@@ -181,12 +198,10 @@ def undo_last_point(variant_original, points, radius, thickness):
     marked = draw_circles_on_image(variant_original, points, radius, thickness)
     return np.array(marked), points
 
-
-
-def step2_make_video(points, radius, thickness):
-    """Step2: 用 base_aligned + variant_aligned + points 生成影片。"""
+def preview_final_frames(points, radius, thickness):
+    """生成最終兩張合成圖：上 = base+variant（無圈），下 = base+variant（有圈）。"""
     if not points:
-        raise gr.Error("請先在變體圖上點擊，標記至少 1 個紅圈（最多 5 個）。")
+        raise gr.Error("請先在步驟 1 標記紅圈。")
 
     base_path = os.path.join(OUTPUTDIR, "base_aligned.jpg")
     variant_path = os.path.join(OUTPUTDIR, "variant_aligned.jpg")
@@ -195,11 +210,45 @@ def step2_make_video(points, radius, thickness):
 
     img1 = Image.open(base_path).convert("RGB")
     img2 = Image.open(variant_path).convert("RGB")
+    img2_marked = draw_circles_on_image(img2, points, radius, thickness)
 
+    w, h = img1.size
+    fullheight = h * 2
+
+    # 合成圖 1：base 上 + variant 下（無圈）
+    canvas1 = np.zeros((fullheight, w, 3), dtype=np.uint8)
+    canvas1[0:h, :, :] = cv2.cvtColor(np.array(img1), cv2.COLOR_RGB2BGR)
+    canvas1[h:fullheight, :, :] = cv2.cvtColor(np.array(img2), cv2.COLOR_RGB2BGR)
+    preview1 = cv2.cvtColor(canvas1, cv2.COLOR_BGR2RGB)
+
+    # 合成圖 2：base 上 + variant 下（有圈）
+    canvas2 = np.zeros((fullheight, w, 3), dtype=np.uint8)
+    canvas2[0:h, :, :] = cv2.cvtColor(np.array(img1), cv2.COLOR_RGB2BGR)
+    canvas2[h:fullheight, :, :] = cv2.cvtColor(np.array(img2_marked), cv2.COLOR_RGB2BGR)
+    preview2 = cv2.cvtColor(canvas2, cv2.COLOR_BGR2RGB)
+
+    return Image.fromarray(preview1), Image.fromarray(preview2)
+
+
+def step2_make_video(base_full, variant_full, points, radius, thickness):
+    """Step2: 用 state 裡的高清 base / variant + points 生成影片。"""
+    if base_full is None or variant_full is None:
+        raise gr.Error("請先在步驟 1 上傳並對齊圖片（按一次『開始（上傳 & 對齊）』）。")
+
+    if not points:
+        raise gr.Error("請先在變體圖上點擊，標記至少 1 個紅圈（最多 5 個）。")
+
+    # 從 numpy 還原成 PIL
+    img1 = Image.fromarray(base_full)
+    img2 = Image.fromarray(variant_full)
+
+    # 畫上紅圈，得到標記後的變體圖
     img2_marked = draw_circles_on_image(img2, points, radius, thickness)
     marked_path = os.path.join(OUTPUTDIR, "variant_marked.jpg")
     img2_marked.save(marked_path)
 
+    # 生成影片
+    os.makedirs(OUTPUTDIR, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     video_filename = f"spotdiff_{timestamp}.mp4"
     video_path = os.path.join(OUTPUTDIR, video_filename)
@@ -208,18 +257,22 @@ def step2_make_video(points, radius, thickness):
     return video_path
 
 
+
 # ====== 建立 Gradio 介面 ======
 with gr.Blocks(title="找不同 Shorts 生成器") as demo:
     gr.Markdown(
         "## 🔍 找不同 Shorts 生成器\n"
-        "1️⃣ 上傳兩張圖 → 2️⃣ 在下方變體圖點 5 個紅圈（可調圈圈大小 & 粗幼）→ "
+        "1️⃣ 上傳兩張圖 → 2️⃣ 在下方變體圖點 5 個紅圈（可調圈圈大小 & 粗幼, 中途不要再按「開始」）→ "
         "3️⃣ 生成 12 秒 YouTube Shorts MP4！"
     )
 
     # State 用來存 points
     points_state = gr.State([])
     variant_original_state = gr.State(None)  # ★ 新增：保存「未畫圈」的變體圖
+    base_full_state = gr.State(None)      # 存高清的 base
+    variant_full_state = gr.State(None)   # 存高清的 variant
 
+    
     with gr.Tab("步驟 1：上傳 & 對齊"):
         with gr.Row():
             base_input = gr.Image(label="📸 上傳基準圖 (base)", type="pil")
@@ -257,10 +310,11 @@ with gr.Blocks(title="找不同 Shorts 生成器") as demo:
 
         # Step1 對齊
         align_button.click(
-            fn=step1_align,
-            inputs=[base_input, variant_input],
-            outputs=[base_show, variant_show, variant_original_state],  # ★ 多一個 state],
+        fn=step1_align,
+        inputs=[base_input, variant_input],
+        outputs=[base_show, variant_show, variant_original_state, base_full_state, variant_full_state],
         )
+
 
         # 點擊變體圖時畫圈
         variant_show.select(
@@ -288,15 +342,30 @@ with gr.Blocks(title="找不同 Shorts 生成器") as demo:
 
 
     with gr.Tab("步驟 2：生成影片"):
-        gr.Markdown("確認紅圈後，按下方按鈕生成 12 秒影片。")
-        make_video_button = gr.Button("🎥 生成 12 秒 MP4")
+        gr.Markdown("確認紅圈後，先預覽合成效果，再生成 12 秒影片。")
+        
+        preview_button = gr.Button("🔍 預覽合成圖（影片前 10 秒 vs 後 2 秒）")
+        with gr.Row():
+            preview_quiz = gr.Image(label="📺 Quiz 畫面：base + variant（無圈）")
+            preview_answer = gr.Image(label="📺 Answer 畫面：base + variant（有圈）")
+        
+        make_video_button = gr.Button("🎥 確認無誤，生成 12 秒 MP4")
         video_output = gr.Video(label="輸出影片", interactive=False)
 
+        # 預覽
+        preview_button.click(
+            fn=preview_final_frames,
+            inputs=[points_state, radius_slider, thickness_slider],
+            outputs=[preview_quiz, preview_answer],
+        )
+
+        # 生成影片
         make_video_button.click(
             fn=step2_make_video,
             inputs=[points_state, radius_slider, thickness_slider],
             outputs=video_output,
         )
+
 
 
 if __name__ == "__main__":
