@@ -238,9 +238,17 @@ def step2_make_video(base_full, variant_full, points, radius, thickness):
     if not points:
         raise gr.Error("請先在變體圖上點擊，標記至少 1 個紅圈（最多 5 個）。")
 
-    # 從 numpy 還原成 PIL
-    img1 = Image.fromarray(base_full)
-    img2 = Image.fromarray(variant_full)
+    import numpy as np  # 上面已經有
+
+    # 如果是 list，就取第一個元素
+    if isinstance(base_full, list):
+        base_full = base_full[0]
+    if isinstance(variant_full, list):
+        variant_full = variant_full[0]
+
+    img1 = Image.fromarray(np.array(base_full))
+    img2 = Image.fromarray(np.array(variant_full))
+
 
     # 畫上紅圈，得到標記後的變體圖
     img2_marked = draw_circles_on_image(img2, points, radius, thickness)
