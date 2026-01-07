@@ -190,4 +190,85 @@ def preview_final_frames(base_full_state, variant_full_state, points):
     
     # 簡單合成預覽
     w, h = img1.size
-    fullheig
+    fullheight = h * 2
+    
+    # Preview 1 (Quiz)
+    canvas1 = Image.new("RGB", (w, fullheight))
+    canvas1.paste(img1, (0, 0))
+    canvas1.paste(img2, (0, h))
+    
+    # Preview 2 (Answer)
+    canvas2 = Image.new("RGB", (w, fullheight))
+    canvas2.paste(img1, (0, 0))
+    canvas2.paste(img2_marked, (0, h))
+    
+    # 縮小預覽圖以免傳輸慢
+    return resize_for_display(canvas1), resize_for_display(canvas2)
+
+def step2_make_video(base_full_state, variant_full_state, points):
+    img1, img2 = get_images_from_state_or_disk(base_full_state, variant_full_state)
+    if img1 is None: raise gr.Error("請回到步驟 1 按『開始』。")
+    if not points: raise gr.Error("請先標記紅圈。")
+    
+    img2_marked = draw_circles_on_image(img2, points)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    video_path = os.path.join(OUTPUTDIR, f"spotdiff_{timestamp}.mp4")
+    
+    make_video_with_opencv_frames(img1, img2, img2_marked, video_path)
+    return video_path
+
+# ====== UI ======
+with gr.Blocks(title="找不同 Shorts 生成器", css=".img-display { object-fit: contain; }") as demo:
+    points_state = gr.State([])
+    variant_original_state = gr.State(None)
+    base_full_state = gr.State(None)
+    variant_full_state = gr.State(None)
+    
+    with gr.Tab("步驟 1：上傳 & 對齊"):
+        with gr.Row():
+            base_input = gr.Image(label="基準圖", type="numpy")
+            variant_input = gr.Image(label="變體圖", type="numpy")
+        align_btn = gr.Button("✅ 開始（上傳 & 對齊）")
+        
+        with gr.Row():
+            base_show = gr.Image(label="基準圖 (已對齊)", height=600, elem_classes="img-display")
+            variant_show = gr.Image(label="變體圖 (點擊畫紅圈)", height=600, interactive=True, elem_classes="img-display")
+            
+        with gr.Row():
+            radius_slider = gr.Slider(10, 300, 40, 2, label="🔴 紅圈半徑")
+            thickness_slider = gr.Slider(2, 20, 6, 1, label="🖊 線條粗幼")
+            
+        with gr.Row():
+            reset_btn = gr.Button("♻️ 重設")
+            undo_btn = gr.Button("↩️ Undo")
+            
+        align_btn.click(step1_align, [base_input, variant_input], 
+                        [base_show, variant_show, variant_original_state, base_full_state, variant_full_state])
+        
+        variant_show.select(on_click_variant, 
+                            [variant_original_state, radius_slider, thickness_slider, points_state], 
+                            [variant_show, points_state])
+                            
+        reset_btn.click(reset_points, [variant_original_state], [variant_show, points_state])
+        undo_btn.click(undo_last_point, [variant_original_state, points_state], [variant_show, points_state])
+        
+    with gr.Tab("步驟 2：生成影片"):
+        preview_btn = gr.Button("🔍 預覽合成圖")
+        with gr.Row():
+            preview_quiz = gr.Image(label="Quiz 畫面 (無圈)")
+            preview_answer = gr.Image(label="Answer 畫面 (有圈)")
+            
+        make_video_btn = gr.Button("🎥 生成 12 秒 MP4")
+        video_out = gr.Video(label="輸出影片")
+        
+        preview_btn.click(preview_final_frames, 
+                          [base_full_state, variant_full_state, points_state],
+                          [preview_quiz, preview_answer])
+                          
+        make_video_btn.click(step2_make_video, 
+                             [base_full_state, variant_full_state, points_state], 
+                             video_out)
+
+if __name__ == "__main__":
+    os.makedirs(OUTPUTDIR, exist_ok=True)
+    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)))
