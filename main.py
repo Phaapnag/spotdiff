@@ -230,25 +230,36 @@ def preview_final_frames(points, radius, thickness):
     return Image.fromarray(preview1), Image.fromarray(preview2)
 
 
+def ensure_uint8_array(data):
+    """確保資料是乾淨的 uint8 numpy array"""
+    # 1. 解開可能的 list 包裝 (遞迴解開直到是 array)
+    while isinstance(data, list):
+        if len(data) == 0: return None
+        data = data[0]
+    
+    # 2. 轉成 numpy array
+    arr = np.array(data)
+    
+    # 3. 確保是 uint8 格式 (Pillow 只吃 uint8)
+    if arr.dtype != np.uint8:
+        # 如果是 float (0-1)，轉 0-255
+        if arr.dtype.kind == 'f' and arr.max() <= 1.0:
+            arr = (arr * 255).astype(np.uint8)
+        else:
+            # 強制轉型
+            arr = arr.astype(np.uint8)
+    return arr
+
 def step2_make_video(base_full, variant_full, points, radius, thickness):
-    """Step2: 用 state 裡的高清 base / variant + points 生成影片。"""
-    if base_full is None or variant_full is None:
-        raise gr.Error("請先在步驟 1 上傳並對齊圖片（按一次『開始（上傳 & 對齊）』）。")
+    # 1. 解開包裝 + 轉型
+    img1_arr = ensure_uint8_array(base_full)
+    img2_arr = ensure_uint8_array(variant_full)
 
-    if not points:
-        raise gr.Error("請先在變體圖上點擊，標記至少 1 個紅圈（最多 5 個）。")
-
-    import numpy as np  # 上面已經有
-
-    # 如果是 list，就取第一個元素
-    if isinstance(base_full, list):
-        base_full = base_full[0]
-    if isinstance(variant_full, list):
-        variant_full = variant_full[0]
-
-    img1 = Image.fromarray(np.array(base_full))
-    img2 = Image.fromarray(np.array(variant_full))
-
+    if img1_arr is None or img2_arr is None:
+        raise gr.Error("圖片資料錯誤，請重新上傳並對齊。")
+    
+    img1 = Image.fromarray(img1_arr)
+    img2 = Image.fromarray(img2_arr)
 
     # 畫上紅圈，得到標記後的變體圖
     img2_marked = draw_circles_on_image(img2, points, radius, thickness)
