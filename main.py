@@ -15,7 +15,7 @@ ANSWERSECONDS = 2
 MAX_DISPLAY = 1024
 MAX_VIDEO_WIDTH = 540  # 限制影片寬度 540p，避免 OOM
 
-# ====== Helper ======
+# ====== Helper Functions ======
 def ensure_uint8_array(data):
     """確保資料是乾淨的 uint8 numpy array"""
     while isinstance(data, list):
@@ -49,7 +49,6 @@ def draw_circles_on_image(img: Image.Image, points: list) -> Image.Image:
     bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
     
     for p in points:
-        # points 支援 (x, y, r, t)
         if len(p) == 4:
             x, y, r, t = p
             cv2.circle(bgr, (int(x), int(y)), int(r), (0, 0, 255), int(t))
@@ -71,7 +70,7 @@ def draw_text_opencv(imgbgr: np.ndarray, text: str):
     return imgbgr
 
 def make_video_with_opencv_frames(img1, img2, img2_marked, outpath):
-    # ★ 極限省記憶體版：直接用 FFMPEG Writer 串流寫入，不囤積 frames list
+    # FFMPEG Writer 串流寫入 (省記憶體)
     from moviepy.video.io.ffmpeg_writer import FFMPEG_VideoWriter
 
     img1bgr = cv2.cvtColor(np.array(img1), cv2.COLOR_RGB2BGR)
@@ -79,8 +78,6 @@ def make_video_with_opencv_frames(img1, img2, img2_marked, outpath):
     img2markedbgr = cv2.cvtColor(np.array(img2_marked), cv2.COLOR_RGB2BGR)
     
     h, w = img1bgr.shape[:2]
-    
-    # 強制縮圖到 540p 以內
     if w > MAX_VIDEO_WIDTH:
         scale = MAX_VIDEO_WIDTH / w
         new_w, new_h = MAX_VIDEO_WIDTH, int(h * scale)
@@ -96,17 +93,14 @@ def make_video_with_opencv_frames(img1, img2, img2_marked, outpath):
     
     writer = FFMPEG_VideoWriter(outpath, (w, fullheight), fps)
     
-    # Quiz 部分
     for i in range(QUIZSECONDS * fps):
         frame = np.zeros((fullheight, w, 3), dtype=np.uint8)
         frame[0:h, :, :] = img1bgr
         frame[h:fullheight, :, :] = img2bgr
-        
         remaining = QUIZSECONDS - i / fps
         frame = draw_text_opencv(frame, f"找出 5 個不同！剩餘 {remaining:.0f} 秒")
         writer.write_frame(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         
-    # Answer 部分
     for _ in range(ANSWERSECONDS * fps):
         frame = np.zeros((fullheight, w, 3), dtype=np.uint8)
         frame[0:h, :, :] = img1bgr
@@ -116,7 +110,7 @@ def make_video_with_opencv_frames(img1, img2, img2_marked, outpath):
         
     writer.close()
 
-# ====== Gradio Functions ======
+# ====== Gradio Logic ======
 
 def step1_align(base_file, variant_file):
     os.makedirs(OUTPUTDIR, exist_ok=True)
@@ -128,11 +122,9 @@ def step1_align(base_file, variant_file):
         Image.fromarray(ensure_uint8_array(variant_file))
     )
     
-    # 存硬碟
     img1.save(os.path.join(OUTPUTDIR, "base_aligned.jpg"))
     img2.save(os.path.join(OUTPUTDIR, "variant_aligned.jpg"))
     
-    # 縮圖顯示
     img1_disp = resize_for_display(img1)
     img2_disp = resize_for_display(img2)
     
@@ -140,10 +132,8 @@ def step1_align(base_file, variant_file):
 
 def on_click_variant(variant_original, evt: gr.SelectData, radius, thickness, points):
     if variant_original is None: return None, points
-    
     x, y = evt.index
     points = list(points or [])
-    
     if len(points) < 5:
         points.append((x, y, radius, thickness))
     
@@ -158,7 +148,6 @@ def reset_points(variant_original):
 def undo_last_point(variant_original, points):
     points = list(points or [])
     if points: points.pop()
-    
     if variant_original is None: return None, points
     
     variant_original_img = Image.fromarray(ensure_uint8_array(variant_original))
@@ -166,7 +155,6 @@ def undo_last_point(variant_original, points):
     return np.array(marked), points
 
 def get_images_from_state_or_disk(base_full_state, variant_full_state):
-    """共用函數：嘗試從硬碟或 State 取得原圖"""
     base_path = os.path.join(OUTPUTDIR, "base_aligned.jpg")
     variant_path = os.path.join(OUTPUTDIR, "variant_aligned.jpg")
     
@@ -181,34 +169,28 @@ def get_images_from_state_or_disk(base_full_state, variant_full_state):
     return img1, img2
 
 def preview_final_frames(base_full_state, variant_full_state, points):
-    """預覽合成圖"""
     img1, img2 = get_images_from_state_or_disk(base_full_state, variant_full_state)
     if img1 is None: raise gr.Error("請回到步驟 1 按『開始』。")
-    if not points: raise gr.Error("請先標記紅圈。")
-
-    img2_marked = draw_circles_on_image(img2, points)
+    # ★ 允許空 points，不報錯
     
-    # 簡單合成預覽
+    img2_marked = draw_circles_on_image(img2, points)
     w, h = img1.size
     fullheight = h * 2
     
-    # Preview 1 (Quiz)
     canvas1 = Image.new("RGB", (w, fullheight))
     canvas1.paste(img1, (0, 0))
     canvas1.paste(img2, (0, h))
     
-    # Preview 2 (Answer)
     canvas2 = Image.new("RGB", (w, fullheight))
     canvas2.paste(img1, (0, 0))
     canvas2.paste(img2_marked, (0, h))
     
-    # 縮小預覽圖以免傳輸慢
     return resize_for_display(canvas1), resize_for_display(canvas2)
 
 def step2_make_video(base_full_state, variant_full_state, points):
     img1, img2 = get_images_from_state_or_disk(base_full_state, variant_full_state)
     if img1 is None: raise gr.Error("請回到步驟 1 按『開始』。")
-    if not points: raise gr.Error("請先標記紅圈。")
+    # ★ 允許空 points，不報錯
     
     img2_marked = draw_circles_on_image(img2, points)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -255,8 +237,9 @@ with gr.Blocks(title="找不同 Shorts 生成器", css=".img-display { object-fi
     with gr.Tab("步驟 2：生成影片"):
         preview_btn = gr.Button("🔍 預覽合成圖")
         with gr.Row():
-            preview_quiz = gr.Image(label="Quiz 畫面 (無圈)")
-            preview_answer = gr.Image(label="Answer 畫面 (有圈)")
+            # ★ 高度改為 300，縮小預覽視窗
+            preview_quiz = gr.Image(label="Quiz 畫面 (無圈)", height=300, elem_classes="img-display")
+            preview_answer = gr.Image(label="Answer 畫面 (有圈)", height=300, elem_classes="img-display")
             
         make_video_btn = gr.Button("🎥 生成 12 秒 MP4")
         video_out = gr.Video(label="輸出影片")
