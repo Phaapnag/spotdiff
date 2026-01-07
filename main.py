@@ -230,50 +230,55 @@ def preview_final_frames(points, radius, thickness):
     return Image.fromarray(preview1), Image.fromarray(preview2)
 
 
-def ensure_uint8_array(data):
-    """確保資料是乾淨的 uint8 numpy array"""
-    # 1. 解開可能的 list 包裝 (遞迴解開直到是 array)
-    while isinstance(data, list):
-        if len(data) == 0: return None
-        data = data[0]
+def step2_make_video(base_full_state, variant_full_state, points, radius, thickness):
+    """Step2: 優先讀硬碟檔案，如果沒有則嘗試從 State 恢復。"""
     
-    # 2. 轉成 numpy array
-    arr = np.array(data)
+    # 1. 嘗試從硬碟讀
+    base_path = os.path.join(OUTPUTDIR, "base_aligned.jpg")
+    variant_path = os.path.join(OUTPUTDIR, "variant_aligned.jpg")
     
-    # 3. 確保是 uint8 格式 (Pillow 只吃 uint8)
-    if arr.dtype != np.uint8:
-        # 如果是 float (0-1)，轉 0-255
-        if arr.dtype.kind == 'f' and arr.max() <= 1.0:
-            arr = (arr * 255).astype(np.uint8)
-        else:
-            # 強制轉型
-            arr = arr.astype(np.uint8)
-    return arr
-
-def step2_make_video(base_full, variant_full, points, radius, thickness):
-    # 1. 解開包裝 + 轉型
-    img1_arr = ensure_uint8_array(base_full)
-    img2_arr = ensure_uint8_array(variant_full)
-
-    if img1_arr is None or img2_arr is None:
-        raise gr.Error("圖片資料錯誤，請重新上傳並對齊。")
+    img1 = None
+    img2 = None
     
-    img1 = Image.fromarray(img1_arr)
-    img2 = Image.fromarray(img2_arr)
+    if os.path.exists(base_path) and os.path.exists(variant_path):
+        # 硬碟有檔，直接讀（最穩）
+        img1 = Image.open(base_path).convert("RGB")
+        img2 = Image.open(variant_path).convert("RGB")
+    else:
+        # 硬碟沒檔，嘗試從 State 救
+        if base_full_state is None or variant_full_state is None:
+             raise gr.Error("圖片資料遺失，請回到步驟 1 按『開始（上傳 & 對齊）』。")
+        
+        # 解開 State 包裝
+        b_data = base_full_state
+        v_data = variant_full_state
+        while isinstance(b_data, list): b_data = b_data[0] if b_data else None
+        while isinstance(v_data, list): v_data = v_data[0] if v_data else None
+            
+        if b_data is None or v_data is None:
+            raise gr.Error("圖片 State 損壞，請重新上傳。")
+            
+        img1 = Image.fromarray(np.array(b_data).astype(np.uint8))
+        img2 = Image.fromarray(np.array(v_data).astype(np.uint8))
 
-    # 畫上紅圈，得到標記後的變體圖
+    if not points:
+        raise gr.Error("請先在變體圖上點擊，標記至少 1 個紅圈。")
+
+    # 畫圈
     img2_marked = draw_circles_on_image(img2, points, radius, thickness)
+    
+    # 存標記圖
     marked_path = os.path.join(OUTPUTDIR, "variant_marked.jpg")
     img2_marked.save(marked_path)
 
     # 生成影片
-    os.makedirs(OUTPUTDIR, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     video_filename = f"spotdiff_{timestamp}.mp4"
     video_path = os.path.join(OUTPUTDIR, video_filename)
 
     make_video_with_opencv_frames(img1, img2, img2_marked, video_path)
     return video_path
+
 
 
 
